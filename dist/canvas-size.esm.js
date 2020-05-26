@@ -5,6 +5,23 @@
  * (c) 2015-2020 John Hildenbiddle <http://hildenbiddle.com>
  * MIT license
  */
+function canvasWorker() {
+    function workerCanvasTest(settings) {
+        var {job: job, cvs: cvs, width: width, height: height, fill: fill} = settings;
+        var ctx = cvs.getContext("2d");
+        ctx.fillRect.apply(ctx, fill);
+        self.postMessage({
+            job: job,
+            width: width,
+            height: height,
+            result: Boolean(ctx.getImageData.apply(ctx, fill).data[3])
+        });
+    }
+    self.onmessage = function(e) {
+        workerCanvasTest(e.data);
+    };
+}
+
 var defaults = {
     max: null,
     min: 1,
@@ -20,20 +37,75 @@ var testSizes = {
     width: [ 4194303, 32767, 16384, 8192, 4096, defaults.min ]
 };
 
-function canvasTest(width, height) {
-    var cvs = document ? document.createElement("canvas") : null;
-    var ctx = cvs && cvs.getContext ? cvs.getContext("2d") : null;
+var worker;
+
+if (window && "OffscreenCanvas" in window && "Worker" in window) {
+    var createWorker = fn => {
+        var js = "(".concat(fn.toString(), ")()");
+        var blob = new Blob([ js ], {
+            type: "application/javascript"
+        });
+        var blobURL = URL.createObjectURL(blob);
+        var worker = new Worker(blobURL);
+        URL.revokeObjectURL(blobURL);
+        return worker;
+    };
+    worker = createWorker(canvasWorker);
+    worker.onmessage = function(e) {
+        console.log("Done (Worker)", e.data);
+        var {width: width, height: height, job: job, result: result} = e.data;
+        document.dispatchEvent(new CustomEvent(job, {
+            detail: {
+                height: height,
+                width: width,
+                result: result
+            }
+        }));
+    };
+}
+
+function canvasTest(settings) {
+    var {width: width, height: height} = settings;
     var w = 1;
     var h = 1;
-    var x = width - w;
-    var y = height - h;
-    try {
-        cvs.width = width;
-        cvs.height = height;
-        ctx.fillRect(x, y, w, h);
-        return Boolean(ctx.getImageData(x, y, w, h).data[3]);
-    } catch (e) {
-        return false;
+    var x = width - 1;
+    var y = height - 1;
+    if (worker) {
+        console.log("Worker");
+        var cvs = new OffscreenCanvas(width, height);
+        var job = Date.now();
+        document.addEventListener(job, (function(e) {
+            console.log("Done (Listener)", e.detail);
+            var {width: width, height: height, result: result} = e.detail;
+            if (result) {
+                settings.onSuccess(width, height);
+            } else {
+                settings.onError(width, height);
+            }
+        }), false);
+        worker.postMessage({
+            cvs: cvs,
+            fill: [ x, y, w, h ],
+            height: height,
+            job: job,
+            width: width
+        }, [ cvs ]);
+    } else {
+        try {
+            console.log("Non-Worker");
+            var _cvs = document.createElement("canvas");
+            var ctx = _cvs.getContext("2d");
+            _cvs.width = width;
+            _cvs.height = height;
+            ctx.fillRect(x, y, w, h);
+            if (ctx.getImageData(x, y, w, h).data[3]) {
+                settings.onSuccess(width, height);
+            } else {
+                settings.onError(width, height);
+            }
+        } catch (e) {
+            settings.onError(width, height);
+        }
     }
 }
 
@@ -41,7 +113,7 @@ function canvasTestLoop(settings) {
     var sizes = settings.sizes.shift();
     var width = sizes[0];
     var height = sizes[1];
-    var testPass = canvasTest(width, height);
+    var testPass = canvasTest(width);
     if (testPass) {
         settings.onSuccess(width, height);
     } else {
@@ -130,7 +202,7 @@ var canvasSize = {
             settings.sizes = [ ...options.sizes ];
             canvasTestLoop(settings);
         } else {
-            var testPass = canvasTest(settings.width, settings.height);
+            var testPass = canvasTest(settings);
             return testPass;
         }
     }

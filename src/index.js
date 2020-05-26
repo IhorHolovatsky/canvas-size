@@ -1,3 +1,6 @@
+import canvasWorker from './worker.js';
+
+
 // Constants & Variables
 // =============================================================================
 const defaults = {
@@ -70,35 +73,114 @@ const testSizes = {
     ]
 };
 
+// Web worker reference
+let worker;
+
+// Generate inline web worker
+if (window && ('OffscreenCanvas' in window) && ('Worker' in window)) {
+    const createWorker = fn => {
+        const js      = `(${fn.toString()})()`;
+        const blob    = new Blob([js], { type: 'application/javascript' });
+        const blobURL = URL.createObjectURL(blob);
+        const worker  = new Worker(blobURL);
+
+        URL.revokeObjectURL(blobURL);
+
+        return worker;
+    };
+
+    worker = createWorker(canvasWorker);
+    worker.onmessage = function(e) {
+        console.log('Done (Worker)', e.data);
+
+        const { width, height, job, result } = e.data;
+
+        document.dispatchEvent(
+            // Dispatch custom event
+            new CustomEvent(job, {
+                detail: {
+                    height,
+                    width,
+                    result
+                }
+            })
+        );
+    };
+}
+
 
 // Functions (Private)
 // =============================================================================
 /**
  * Tests ability to read pixel data from a canvas at a specified dimension.
  *
- * @param {number} width
- * @param {number} height
+ * @param {object} settings
+ * @param {number} settings.width
+ * @param {number} settings.height
+ * @param {function} settings.onError
+ * @param {function} settings.onSuccess
+ *
  * @returns {boolean}
  */
-function canvasTest(width, height) {
-    const cvs = document ? document.createElement('canvas') : null;
-    const ctx = cvs && cvs.getContext ? cvs.getContext('2d') : null;
-    const w   = 1;
-    const h   = 1;
-    const x   = width - w;  // Right edge
-    const y   = height - h; // Bottom edge
+function canvasTest(settings) {
+    const { width, height } = settings;
+    const w = 1; // Width
+    const h = 1; // Height
+    const x = width - 1;  // Right edge
+    const y = height - 1; // Bottom edge
 
-    try {
-        // Set sized canvas dimensions and draw test rectangle
-        cvs.width = width;
-        cvs.height = height;
-        ctx.fillRect(x, y, w, h);
+    // Web worker
+    if (worker) {
+        console.log('Worker');
 
-        // Verify test rectangle image data (Pass = 255, Fail = 0)
-        return Boolean(ctx.getImageData(x, y, w, h).data[3]);
+        const cvs = new OffscreenCanvas(width, height);
+        const job = Date.now();
+
+        // Listen for custom job event
+        document.addEventListener(job, function(e) {
+            console.log('Done (Listener)', e.detail);
+
+            const { width, height, result } = e.detail;
+
+            if (result) {
+                settings.onSuccess(width, height);
+            }
+            else {
+                settings.onError(width, height);
+            }
+        }, false);
+
+        // Send canvas reference and test data to web worker
+        worker.postMessage({
+            cvs,
+            fill: [x, y, w, h],
+            height,
+            job,
+            width
+        }, [cvs]);
     }
-    catch(e){
-        return false;
+    else {
+        try {
+            console.log('Non-Worker');
+
+            const cvs = document.createElement('canvas');
+            const ctx = cvs.getContext('2d');
+
+            cvs.width = width;
+            cvs.height = height;
+            ctx.fillRect(x, y, w, h);
+
+            // Verify test rectangle image data (Pass = 255, Fail = 0)
+            if (ctx.getImageData(x, y, w, h).data[3]) {
+                settings.onSuccess(width, height);
+            }
+            else {
+                settings.onError(width, height);
+            }
+        }
+        catch(e){
+            settings.onError(width, height);
+        }
     }
 }
 
@@ -266,7 +348,7 @@ const canvasSize = {
      * @param {number[][]} [options.sizes]
      * @param {function} [options.onError]
      * @param {function} [options.onSuccess]
-     * @returns {boolean} Returns boolean when width/heigt is set (not sizes)
+     * @returns {boolean} Returns boolean when width/height is set (not sizes)
      */
     test(options = {}) {
         const settings = Object.assign({}, defaults, options);
@@ -276,7 +358,7 @@ const canvasSize = {
             canvasTestLoop(settings);
         }
         else {
-            const testPass = canvasTest(settings.width, settings.height);
+            const testPass = canvasTest(settings);
 
             return testPass;
         }

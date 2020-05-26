@@ -164,13 +164,24 @@ describe('canvasSize', function() {
     describe('test()', function() {
         const title = this.title;
 
-        it('returns true for for valid width / height', function() {
-            const testResult = canvasSize.test({
-                width : 1,
-                height: 1
-            });
+        it.only('returns true for for valid width / height', function(done) {
+            const testContext = this;
+            const testWidth = 1;
+            const testHeight = 1;
 
-            expect(testResult).to.equal(true);
+            canvasSize.test({
+                width: testWidth,
+                height: testHeight,
+                onError(width, height) {
+                    handleError(title, width, height);
+                },
+                onSuccess(width, height) {
+                    handleSuccess(title, width, height, testContext);
+                    expect(width).to.equal(testWidth);
+                    expect(height).to.equal(testHeight);
+                    done();
+                }
+            });
         });
 
         it('returns false for for valid width / height', function() {
