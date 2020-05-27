@@ -6,20 +6,33 @@
  * MIT license
  */
 function canvasWorker() {
-    function workerCanvasTest(settings) {
-        var {job: job, cvs: cvs, width: width, height: height, fill: fill} = settings;
+    function canvasTest(settings) {
+        var {job: job, width: width, height: height, fill: fill} = settings;
+        var cvs = new OffscreenCanvas(width, height);
         var ctx = cvs.getContext("2d");
         ctx.fillRect.apply(ctx, fill);
+        var isTestPass = Boolean(ctx.getImageData.apply(ctx, fill).data[3]);
         self.postMessage({
             job: job,
             width: width,
             height: height,
-            result: Boolean(ctx.getImageData.apply(ctx, fill).data[3])
+            isTestPass: isTestPass
         });
     }
     self.onmessage = function(e) {
-        workerCanvasTest(e.data);
+        canvasTest(e.data);
     };
+}
+
+function createWorker(fn) {
+    var js = "(".concat(fn.toString(), ")()");
+    var blob = new Blob([ js ], {
+        type: "application/javascript"
+    });
+    var blobURL = URL.createObjectURL(blob);
+    var worker = new Worker(blobURL);
+    URL.revokeObjectURL(blobURL);
+    return worker;
 }
 
 var defaults = {
@@ -33,32 +46,22 @@ var defaults = {
 
 var testSizes = {
     area: [ 16384, 14188, 11402, 10836, 11180, 8192, 4096, defaults.min ],
-    height: [ 8388607, 32767, 16384, 8192, 4096, defaults.min ],
-    width: [ 4194303, 32767, 16384, 8192, 4096, defaults.min ]
+    height: [ 8388607, 65535, 32767, 16384, 8192, 4096, defaults.min ],
+    width: [ 4194303, 65535, 32767, 16384, 8192, 4096, defaults.min ]
 };
 
 var worker;
 
 if (window && "OffscreenCanvas" in window && "Worker" in window) {
-    var createWorker = fn => {
-        var js = "(".concat(fn.toString(), ")()");
-        var blob = new Blob([ js ], {
-            type: "application/javascript"
-        });
-        var blobURL = URL.createObjectURL(blob);
-        var worker = new Worker(blobURL);
-        URL.revokeObjectURL(blobURL);
-        return worker;
-    };
     worker = createWorker(canvasWorker);
     worker.onmessage = function(e) {
-        console.log("Done (Worker)", e.data);
-        var {width: width, height: height, job: job, result: result} = e.data;
+        var {job: job, width: width, height: height, isTestPass: isTestPass} = e.data;
         document.dispatchEvent(new CustomEvent(job, {
             detail: {
-                height: height,
                 width: width,
-                result: result
+                height: height,
+                isTestPass: isTestPass,
+                benchmark: Date.now() - job
             }
         }));
     };
@@ -66,40 +69,34 @@ if (window && "OffscreenCanvas" in window && "Worker" in window) {
 
 function canvasTest(settings) {
     var {width: width, height: height} = settings;
-    var w = 1;
-    var h = 1;
-    var x = width - 1;
-    var y = height - 1;
+    var fill = [ width - 1, height - 1, 1, 1 ];
+    var job = Date.now();
     if (worker) {
-        console.log("Worker");
-        var cvs = new OffscreenCanvas(width, height);
-        var job = Date.now();
         document.addEventListener(job, (function(e) {
-            console.log("Done (Listener)", e.detail);
-            var {width: width, height: height, result: result} = e.detail;
-            if (result) {
-                settings.onSuccess(width, height);
+            var {width: width, height: height, isTestPass: isTestPass, benchmark: benchmark} = e.detail;
+            if (isTestPass) {
+                settings.onSuccess(width, height, benchmark);
             } else {
                 settings.onError(width, height);
             }
         }), false);
         worker.postMessage({
-            cvs: cvs,
-            fill: [ x, y, w, h ],
-            height: height,
             job: job,
-            width: width
-        }, [ cvs ]);
+            width: width,
+            height: height,
+            fill: fill
+        });
     } else {
         try {
-            console.log("Non-Worker");
-            var _cvs = document.createElement("canvas");
-            var ctx = _cvs.getContext("2d");
-            _cvs.width = width;
-            _cvs.height = height;
-            ctx.fillRect(x, y, w, h);
-            if (ctx.getImageData(x, y, w, h).data[3]) {
-                settings.onSuccess(width, height);
+            var cvs = document.createElement("canvas");
+            var ctx = cvs.getContext("2d");
+            cvs.width = width;
+            cvs.height = height;
+            ctx.fillRect.apply(ctx, fill);
+            var isTestPass = Boolean(ctx.getImageData.apply(ctx, fill).data[3]);
+            if (isTestPass) {
+                var benchmark = Date.now() - job;
+                settings.onSuccess(width, height, benchmark);
             } else {
                 settings.onError(width, height);
             }
@@ -113,17 +110,17 @@ function canvasTestLoop(settings) {
     var sizes = settings.sizes.shift();
     var width = sizes[0];
     var height = sizes[1];
-    var testPass = canvasTest(width);
-    if (testPass) {
-        settings.onSuccess(width, height);
-    } else {
-        settings.onError(width, height);
-        if (settings.sizes.length) {
-            setTimeout((function() {
+    canvasTest({
+        width: width,
+        height: height,
+        onError(width, height) {
+            settings.onError(width, height);
+            if (settings.sizes.length) {
                 canvasTestLoop(settings);
-            }), 0);
-        }
-    }
+            }
+        },
+        onSuccess: settings.onSuccess
+    });
 }
 
 function createSizesArray(settings) {
@@ -202,8 +199,7 @@ var canvasSize = {
             settings.sizes = [ ...options.sizes ];
             canvasTestLoop(settings);
         } else {
-            var testPass = canvasTest(settings);
-            return testPass;
+            canvasTest(settings);
         }
     }
 };

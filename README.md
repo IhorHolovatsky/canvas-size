@@ -107,6 +107,7 @@ When `options.max` is specified, the value will be used for the initial area/hei
   - Arguments:
     1. **width**: Width of canvas element (will be`1` for `maxHeight()`)
     1. **height**: Height of canvas element (will be `1` for `maxWidth()`)
+    1. **benchmark**: Execution time in milliseconds
 
 **Examples**
 
@@ -118,8 +119,9 @@ canvasSize.maxArea({
   onError: function(width, height) {
     console.log('Error:', width, height);
   },
-  onSuccess: function(width, height) {
+  onSuccess: function(width, height, benchmark) {
     console.log('Success:', width, height);
+    console.log('Benchmark:', benchmark + ' ms');
   }
 });
 
@@ -134,9 +136,10 @@ canvasSize.maxArea({
     // 3: 14336,14336 (max - 2048)
     console.log('Error:', width, height);
   },
-  onSuccess: function(width, height) {
+  onSuccess: function(width, height, benchmark) {
     // 4: 13312,13312 (max - 3072)
     console.log('Success:', width, height);
+    console.log('Benchmark:', benchmark + ' ms');
   }
 });
 ```
@@ -167,6 +170,7 @@ To test multiple dimensions, use `options.sizes` to provide an `array` of `[widt
   - Arguments:
     1. **width**: width of canvas element
     1. **height**: height of canvas element
+    1. **benchmark**: Execution time in milliseconds
 
 **Returns**
 
@@ -195,9 +199,10 @@ canvasSize.test({
     // 2: 8192,8192
     console.log('Error:', width, height);
   },
-  onSuccess: function(width, height) {
+  onSuccess: function(width, height, benchmark) {
     // 3: 4096,4096
     console.log('Success:', width, height);
+    console.log('Benchmark:', benchmark + ' ms');
   }
 });
 ```

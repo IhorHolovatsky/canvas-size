@@ -1,4 +1,5 @@
 import canvasWorker from './worker.js';
+import createWorker from './create-worker.js';
 
 
 // Constants & Variables
@@ -39,6 +40,8 @@ const testSizes = {
         // Safari 7-12 (Mac)
         // Safari (iOS 9-12)
         8388607,
+        // Chrome ??
+        65535,
         // Chrome 70 (Mac, Win)
         // Chrome 68 (Android 4.4-9)
         // Firefox 63 (Mac, Win)
@@ -57,6 +60,8 @@ const testSizes = {
         // Safari 7-12 (Mac)
         // Safari (iOS 9-12)
         4194303,
+        // Chrome ??
+        65535,
         // Chrome 70 (Mac, Win)
         // Chrome 68 (Android 4.4-9)
         // Firefox 63 (Mac, Win)
@@ -78,30 +83,18 @@ let worker;
 
 // Generate inline web worker
 if (window && ('OffscreenCanvas' in window) && ('Worker' in window)) {
-    const createWorker = fn => {
-        const js      = `(${fn.toString()})()`;
-        const blob    = new Blob([js], { type: 'application/javascript' });
-        const blobURL = URL.createObjectURL(blob);
-        const worker  = new Worker(blobURL);
-
-        URL.revokeObjectURL(blobURL);
-
-        return worker;
-    };
-
     worker = createWorker(canvasWorker);
     worker.onmessage = function(e) {
-        console.log('Done (Worker)', e.data);
-
-        const { width, height, job, result } = e.data;
+        const { job, width, height, isTestPass } = e.data;
 
         document.dispatchEvent(
             // Dispatch custom event
             new CustomEvent(job, {
                 detail: {
-                    height,
                     width,
-                    result
+                    height,
+                    isTestPass,
+                    benchmark: (Date.now() - job) // milliseconds
                 }
             })
         );
@@ -119,31 +112,20 @@ if (window && ('OffscreenCanvas' in window) && ('Worker' in window)) {
  * @param {number} settings.height
  * @param {function} settings.onError
  * @param {function} settings.onSuccess
- *
- * @returns {boolean}
  */
 function canvasTest(settings) {
     const { width, height } = settings;
-    const w = 1; // Width
-    const h = 1; // Height
-    const x = width - 1;  // Right edge
-    const y = height - 1; // Bottom edge
+    const fill = [width - 1, height - 1, 1, 1]; // x, y, width, height
+    const job  = Date.now();
 
     // Web worker
     if (worker) {
-        console.log('Worker');
-
-        const cvs = new OffscreenCanvas(width, height);
-        const job = Date.now();
-
         // Listen for custom job event
         document.addEventListener(job, function(e) {
-            console.log('Done (Listener)', e.detail);
+            const { width, height, isTestPass, benchmark } = e.detail;
 
-            const { width, height, result } = e.detail;
-
-            if (result) {
-                settings.onSuccess(width, height);
+            if (isTestPass) {
+                settings.onSuccess(width, height, benchmark);
             }
             else {
                 settings.onError(width, height);
@@ -152,27 +134,28 @@ function canvasTest(settings) {
 
         // Send canvas reference and test data to web worker
         worker.postMessage({
-            cvs,
-            fill: [x, y, w, h],
-            height,
             job,
-            width
-        }, [cvs]);
+            width,
+            height,
+            fill
+        });
     }
     else {
         try {
-            console.log('Non-Worker');
-
             const cvs = document.createElement('canvas');
             const ctx = cvs.getContext('2d');
 
             cvs.width = width;
             cvs.height = height;
-            ctx.fillRect(x, y, w, h);
+            ctx.fillRect.apply(ctx, fill);
 
-            // Verify test rectangle image data (Pass = 255, Fail = 0)
-            if (ctx.getImageData(x, y, w, h).data[3]) {
-                settings.onSuccess(width, height);
+            // Verify image data (Pass = 255, Fail = 0)
+            const isTestPass = Boolean(ctx.getImageData.apply(ctx, fill).data[3]);
+
+            if (isTestPass) {
+                const benchmark = Date.now() - job; // milliseconds
+
+                settings.onSuccess(width, height, benchmark);
             }
             else {
                 settings.onError(width, height);
@@ -194,23 +177,22 @@ function canvasTest(settings) {
  * @param {function} settings.onSuccess
  */
 function canvasTestLoop(settings) {
-    const sizes    = settings.sizes.shift();
-    const width    = sizes[0];
-    const height   = sizes[1];
-    const testPass = canvasTest(width, height);
+    const sizes  = settings.sizes.shift();
+    const width  = sizes[0];
+    const height = sizes[1];
 
-    if (testPass) {
-        settings.onSuccess(width, height);
-    }
-    else {
-        settings.onError(width, height);
+    canvasTest({
+        width,
+        height,
+        onError(width, height) {
+            settings.onError(width, height);
 
-        if (settings.sizes.length) {
-            setTimeout(function(){
+            if (settings.sizes.length) {
                 canvasTestLoop(settings);
-            }, 0);
-        }
-    }
+            }
+        },
+        onSuccess: settings.onSuccess
+    });
 }
 
 /**
@@ -348,7 +330,6 @@ const canvasSize = {
      * @param {number[][]} [options.sizes]
      * @param {function} [options.onError]
      * @param {function} [options.onSuccess]
-     * @returns {boolean} Returns boolean when width/height is set (not sizes)
      */
     test(options = {}) {
         const settings = Object.assign({}, defaults, options);
@@ -358,9 +339,7 @@ const canvasSize = {
             canvasTestLoop(settings);
         }
         else {
-            const testPass = canvasTest(settings);
-
-            return testPass;
+            canvasTest(settings);
         }
     }
 };
